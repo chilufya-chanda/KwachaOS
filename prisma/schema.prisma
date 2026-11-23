@@ -1,0 +1,785 @@
+// Kwacha OS — Prisma schema
+// SQLite is the single source of truth for ALL application state.
+// Firebase is identity-only: we never store passwords here.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// IDENTITY & WORKSPACE (Phase 1-2)
+// ---------------------------------------------------------------------------
+
+model User {
+  id               String   @id @default(cuid())
+  firebaseUid      String   @unique
+  email            String   @unique
+  displayName      String?
+  photoUrl         String?
+  role             String   @default("business_user") // business_user | admin | developer
+  subscriptionTier String   @default("none") // none | starter | growth | scale
+  onboardingStatus String   @default("account_created")
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  workspaces        WorkspaceMember[]
+  ownedWorkspaces   Workspace[]        @relation("WorkspaceOwner")
+  apiKeys           ApiKey[]
+  notifications     Notification[]
+  adminAuditLogs    AdminAuditLog[]
+  approvalsDecided  Approval[]
+}
+
+model Workspace {
+  id        String   @id @default(cuid())
+  name      String
+  type      String   @default("business") // personal | business | developer | organization
+  ownerId   String
+  owner     User     @relation("WorkspaceOwner", fields: [ownerId], references: [id])
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  members      WorkspaceMember[]
+  businesses   Business[]
+  subscription Subscription?
+  apiKeys      ApiKey[]
+  integrations Integration[]
+  integrationAuditLogs IntegrationAuditLog[]
+  wallet       Wallet?
+  aiUsageEvents AiUsageEvent[]
+  permissionSettings PermissionSetting[]
+  spendControl SpendControl?
+  communicationPolicy CommunicationPolicy?
+  agentSettings AgentSetting[]
+}
+
+model WorkspaceMember {
+  id          String   @id @default(cuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+  userId      String
+  user        User      @relation(fields: [userId], references: [id])
+  role        String    @default("owner") // owner | member
+  createdAt   DateTime  @default(now())
+
+  @@unique([workspaceId, userId])
+}
+
+model Subscription {
+  id             String   @id @default(cuid())
+  workspaceId    String   @unique
+  workspace      Workspace @relation(fields: [workspaceId], references: [id])
+  tier           String    // lite | pro | max | enterprise
+  status         String    @default("pending_payment") // pending_payment | demo_active | canceled
+  demoPaymentRef String?  // id of the simulated DemoPayment record — never real card data
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  payments DemoPayment[]
+}
+
+// A fully simulated payment attempt. No real card data is ever accepted or
+// stored here — only a masked last-4 and a synthetic authorization result.
+// See Section 12 / 79 of the spec: this must never touch a real gateway.
+model DemoPayment {
+  id             String   @id @default(cuid())
+  subscriptionId String
+  subscription   Subscription @relation(fields: [subscriptionId], references: [id])
+  tier           String
+  amount         Float
+  currency       String   @default("ZMW")
+  cardLast4      String
+  result         String   // authorized | declined | cancelled
+  isSimulated    Boolean  @default(true)
+  createdAt      DateTime @default(now())
+}
+
+model Business {
+  id               String   @id @default(cuid())
+  workspaceId      String
+  workspace        Workspace @relation(fields: [workspaceId], references: [id])
+  name             String
+  industry         String?
+  location         String?
+  description      String?
+  targetMarket     String?
+  targetCustomers  String?
+  mainGoal         String? // generate_leads | increase_sales | improve_marketing | research_markets | automate_support | analyze_performance | create_content | other
+  availableBudget  Float?
+  currency         String   @default("ZMW")
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  missions Mission[]
+  budgets  Budget[]
+  knowledge BusinessKnowledge[]
+  brandProfile BrandProfile?
+}
+
+// ---------------------------------------------------------------------------
+// INTEGRATIONS — real OAuth connections (Complete Architecture #28-30,
+// User Flow Stage 11 / 11A). Tokens are encrypted at rest (see
+// src/lib/integrations/crypto.ts) — never stored or returned in plaintext.
+// ---------------------------------------------------------------------------
+
+model Integration {
+  id          String   @id @default(cuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+
+  provider String // facebook | instagram | whatsapp | tiktok | linkedin | youtube | google | website | crm | email | calendar | ecommerce | payment
+  status   String @default("disconnected") // disconnected | connected | expired | error
+
+  externalAccountId   String?
+  externalAccountName String?
+  scopes              String? // comma-separated granted scopes
+
+  accessTokenEnc  String? // AES-256-GCM, base64 — see lib/integrations/crypto.ts
+  refreshTokenEnc String?
+  tokenExpiresAt  DateTime?
+
+  connectedAt DateTime?
+  lastError   String?
+
+  // Stage 11A — business context captured when the account is connected
+  contextBusinessName   String?
+  contextIndustry       String?
+  contextCategory       String?
+  contextCountry        String?
+  contextRegion         String?
+  contextCity           String?
+  contextWebsite        String?
+  contextPhone          String?
+  contextEmail          String?
+  contextDescription    String?
+  contextProducts       String?
+  contextTargetCustomers String?
+  contextLanguage       String?
+  contextHours          String?
+
+  purposeMarketing       Boolean @default(false)
+  purposeOrganicSocial   Boolean @default(false)
+  purposeCustomerComms   Boolean @default(false)
+  purposeLeadGen         Boolean @default(false)
+  purposePaidAds         Boolean @default(false)
+  purposeCustomerSupport Boolean @default(false)
+  purposeBrandOnly       Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([workspaceId, provider])
+}
+
+model IntegrationAuditLog {
+  id          String   @id @default(cuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+  provider    String
+  action      String // connect_initiated | connect_success | connect_error | disconnect | token_refresh | context_saved
+  detail      String?
+  createdAt   DateTime @default(now())
+}
+
+
+
+// ---------------------------------------------------------------------------
+// AGENT WALLET & LEDGER — real money accounting, separate from the
+// mission-simulation LedgerTransaction/SimulationAccount above (Internal
+// Ops/BI/Finance Architecture #9-14). Deposits go through the same
+// simulated-card pattern as DemoPayment above — no real gateway is wired
+// up. WalletTransaction rows are append-only: never update or delete a
+// posted row; corrections are new REFUND/ADJUSTMENT/CHARGEBACK rows that
+// reference the original via `reference`.
+// ---------------------------------------------------------------------------
+
+model Wallet {
+  id          String    @id @default(cuid())
+  workspaceId String    @unique
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+
+  balance  Float  @default(0)
+  currency String @default("USD")
+
+  autoTopUpEnabled     Boolean   @default(false)
+  autoTopUpThreshold   Float     @default(5)
+  autoTopUpAmount      Float     @default(20)
+  lowBalanceNotifiedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  transactions WalletTransaction[]
+}
+
+model WalletTransaction {
+  id       String @id @default(cuid())
+  walletId String
+  wallet   Wallet @relation(fields: [walletId], references: [id])
+
+  // Denormalized so BI queries don't need to join through Wallet.
+  workspaceId String
+
+  type     String // DEPOSIT | USAGE | REFUND | CREDIT | ADJUSTMENT | CHARGEBACK | EXPIRATION
+  amount   Float // always positive; direction is implied by `type`
+  currency String @default("USD")
+
+  balanceBefore Float
+  balanceAfter  Float
+
+  agentId String?
+  agent   Agent?  @relation(fields: [agentId], references: [id])
+  provider String?
+
+  usageEventId String?       @unique
+  usageEvent   AiUsageEvent? @relation(fields: [usageEventId], references: [id])
+
+  status    String @default("posted") // posted | reversed
+  reference String?
+
+  createdAt DateTime @default(now())
+
+  @@index([workspaceId, createdAt])
+  @@index([workspaceId, type])
+}
+
+// Model Cost Engine (#13) — never hard-code provider prices in application
+// code. When a provider changes pricing, insert a new row rather than
+// editing the old one, so historical profitability stays accurate.
+model ModelPrice {
+  id             String    @id @default(cuid())
+  provider       String
+  model          String
+  effectiveFrom  DateTime  @default(now())
+  effectiveUntil DateTime?
+
+  inputPrice       Float  @default(0)
+  outputPrice      Float  @default(0)
+  cachedInputPrice Float  @default(0)
+  imagePrice       Float  @default(0)
+  videoPrice       Float  @default(0)
+  audioPrice       Float  @default(0)
+  currency         String @default("USD")
+  unit             String @default("per_1k_units") // pricing is per 1,000 units (tokens/images/seconds)
+
+  createdAt DateTime @default(now())
+
+  @@index([provider, model, effectiveFrom])
+}
+
+// AI Usage Ledger (#12) — one row per AI operation, regardless of provider.
+model AiUsageEvent {
+  id          String    @id @default(cuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+  businessId  String?
+  userId      String?
+  agentId     String?
+  agent       Agent?    @relation(fields: [agentId], references: [id])
+  taskId      String?
+
+  provider  String
+  model     String
+  operation String
+
+  inputUnits   Float @default(0)
+  outputUnits  Float @default(0)
+  cachedUnits  Float @default(0)
+  imageUnits   Float @default(0)
+  videoSeconds Float @default(0)
+  audioSeconds Float @default(0)
+  requestCount Int   @default(1)
+
+  providerCost   Float  @default(0)
+  customerCharge Float  @default(0)
+  currency       String @default("USD")
+  status         String @default("completed") // completed | failed
+
+  createdAt DateTime @default(now())
+
+  walletTransaction WalletTransaction?
+
+  @@index([workspaceId, createdAt])
+  @@index([agentId, createdAt])
+}
+
+
+
+// ---------------------------------------------------------------------------
+// MISSION ENGINE (Phase 3) — stubs wired now, filled in next phase
+// ---------------------------------------------------------------------------
+
+model Mission {
+  id             String   @id @default(cuid())
+  businessId     String
+  business       Business @relation(fields: [businessId], references: [id])
+  objective      String
+  targetAudience String?
+  budgetAmount   Float
+  currency       String   @default("ZMW")
+  deadline       DateTime
+  successMetric  String
+  status         String   @default("draft") // draft | active | paused | completed | expired | failed
+  currentStage   String   @default("understanding")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  heartbeatRuns HeartbeatRun[]
+  stages   MissionStage[]
+  agents   AgentTask[]
+  runs     AgentRun[]
+  leads    Lead[]
+  campaigns Campaign[]
+  approvals Approval[]
+  memories  Memory[]
+  decisions Decision[]
+  activity  ActivityLog[]
+  simulationEvents SimulationEvent[]
+  contentDrafts ContentDraft[]
+  communicationMessages CommunicationMessage[]
+  socialPosts SocialPost[]
+}
+
+model HeartbeatRun {
+  id            String   @id @default(cuid())
+  missionId     String
+  mission       Mission  @relation(fields: [missionId], references: [id])
+  status        String   // active | idle | blocked | completed | expired | failed
+  action        String
+  message       String
+  tasksProcessed Int     @default(0)
+  createdAt     DateTime @default(now())
+
+  @@index([missionId, createdAt])
+}
+
+model MissionStage {
+  id        String   @id @default(cuid())
+  missionId String
+  mission   Mission  @relation(fields: [missionId], references: [id])
+  name      String
+  status    String   @default("pending") // pending | active | complete
+  order     Int
+  startedAt DateTime?
+  completedAt DateTime?
+}
+
+// ---------------------------------------------------------------------------
+// AGENTS & TOOLS (Phase 5) — stubs
+// ---------------------------------------------------------------------------
+
+model Agent {
+  id        String   @id @default(cuid())
+  key       String   @unique // research | marketing | sales | analytics
+  name      String
+  description String
+  status    String   @default("idle") // idle | active | error
+
+  tasks AgentTask[]
+  runs  AgentRun[]
+  walletTransactions WalletTransaction[]
+  aiUsageEvents      AiUsageEvent[]
+}
+
+model AgentTask {
+  id        String   @id @default(cuid())
+  missionId String
+  mission   Mission  @relation(fields: [missionId], references: [id])
+  agentId   String
+  agent     Agent    @relation(fields: [agentId], references: [id])
+  title     String
+  status    String   @default("queued") // queued | running | done | failed
+  createdAt DateTime @default(now())
+}
+
+model AgentRun {
+  id         String   @id @default(cuid())
+  missionId  String
+  mission    Mission  @relation(fields: [missionId], references: [id])
+  agentId    String
+  agent      Agent    @relation(fields: [agentId], references: [id])
+  input      String
+  output     String
+  reasoning  String?
+  toolsUsed  String? // json array
+  createdAt  DateTime @default(now())
+}
+
+model Tool {
+  id          String @id @default(cuid())
+  key         String @unique
+  name        String
+  description String
+  category    String // marketing | research | sales | analytics | economy
+}
+
+// ---------------------------------------------------------------------------
+// SIMULATION / ECONOMY (Phase 6)
+// ---------------------------------------------------------------------------
+
+model Lead {
+  id          String   @id @default(cuid())
+  missionId   String
+  mission     Mission  @relation(fields: [missionId], references: [id])
+  name        String
+  contact     String?
+  interest    String?
+  budget      Float?
+  qualification String // unqualified | low | medium | high
+  status      String   @default("new") // new | qualified | contacted | won | lost
+  createdAt   DateTime @default(now())
+}
+
+// ---------------------------------------------------------------------------
+// CONTENT / COMMUNICATION / SOCIAL PUBLISHING — real agent output.
+// Content is genuinely authored by Gemini as part of the agent's own
+// reasoning turn (passed as real function-call arguments, not a canned
+// string) and persisted here. Publishing/sending only ever succeeds when a
+// real Integration is connected (see src/lib/integrations) — otherwise the
+// tool honestly reports "not connected" rather than faking success.
+// ---------------------------------------------------------------------------
+
+model ContentDraft {
+  id        String   @id @default(cuid())
+  missionId String
+  mission   Mission  @relation(fields: [missionId], references: [id])
+  platform  String // facebook | instagram | tiktok | linkedin | youtube | generic
+  kind      String // post | caption | ad_copy
+  body      String
+  status    String   @default("draft") // draft | published
+  createdAt DateTime @default(now())
+}
+
+model CommunicationMessage {
+  id          String   @id @default(cuid())
+  missionId   String
+  mission     Mission  @relation(fields: [missionId], references: [id])
+  channel     String // whatsapp
+  direction   String // outbound | inbound
+  contactRef  String // phone number / contact identifier
+  body        String
+  status      String // sent | failed | not_connected
+  externalMessageId String?
+  createdAt   DateTime @default(now())
+}
+
+model SocialPost {
+  id             String   @id @default(cuid())
+  missionId      String
+  mission        Mission  @relation(fields: [missionId], references: [id])
+  platform       String // facebook | instagram | tiktok | linkedin | youtube
+  content        String
+  status         String // published | failed | not_connected
+  externalPostId String?
+  createdAt      DateTime @default(now())
+}
+
+model Campaign {
+  id         String   @id @default(cuid())
+  missionId  String
+  mission    Mission  @relation(fields: [missionId], references: [id])
+  name       String
+  status     String   @default("draft") // draft | pending_approval | active | paused | completed
+  spend      Float    @default(0)
+  createdAt  DateTime @default(now())
+
+  metrics CampaignMetric[]
+  simulationEvents SimulationEvent[]
+}
+
+model CampaignMetric {
+  id         String   @id @default(cuid())
+  campaignId String
+  campaign   Campaign @relation(fields: [campaignId], references: [id])
+  date       DateTime
+  impressions Int     @default(0)
+  clicks      Int     @default(0)
+  leads       Int     @default(0)
+  enquiries   Int     @default(0)
+  qualifiedLeads Int  @default(0)
+  spend       Float   @default(0)
+}
+
+model SimulationEvent {
+  id          String   @id @default(cuid())
+  missionId   String
+  campaignId  String?
+  type        String
+  payload     String
+  createdAt   DateTime @default(now())
+  mission     Mission  @relation(fields: [missionId], references: [id])
+  campaign    Campaign? @relation(fields: [campaignId], references: [id])
+}
+
+model Budget {
+  id         String   @id @default(cuid())
+  businessId String
+  business   Business @relation(fields: [businessId], references: [id])
+  category   String // marketing | affiliate | other
+  allocated  Float
+  spent      Float    @default(0)
+}
+
+model LedgerTransaction {
+  id        String   @id @default(cuid())
+  type      String // debit | credit
+  amount    Float
+  reason    String
+  isSimulated Boolean @default(true)
+  createdAt DateTime @default(now())
+}
+
+model SimulationAccount {
+  id        String   @id @default(cuid())
+  label     String
+  balance   Float    @default(0)
+  createdAt DateTime @default(now())
+}
+
+model MarketInstrument {
+  id     String @id @default(cuid())
+  symbol String @unique
+  name   String
+  price  Float
+  positions PaperPosition[]
+}
+
+model PaperPosition {
+  id           String @id @default(cuid())
+  instrumentId String
+  quantity     Float
+  entryPrice   Float
+  status       String @default("open")
+  instrument   MarketInstrument @relation(fields: [instrumentId], references: [id])
+}
+
+// ---------------------------------------------------------------------------
+// GOVERNANCE / AUDIT (Phase 8)
+// ---------------------------------------------------------------------------
+
+model Decision {
+  id          String   @id @default(cuid())
+  missionId   String
+  mission     Mission  @relation(fields: [missionId], references: [id])
+  actor       String
+  trigger     String
+  summary     String
+  evidence   String?
+  action      String
+  outcome     String?
+  createdAt   DateTime @default(now())
+
+  @@index([missionId, createdAt])
+}
+
+model Approval {
+  id         String   @id @default(cuid())
+  missionId  String
+  mission    Mission  @relation(fields: [missionId], references: [id])
+  title      String
+  description String
+  status     String   @default("pending") // pending | approved | rejected
+
+  // When set, this approval represents a real deferred tool call — the
+  // action the agent wanted to take is NOT performed until a human
+  // approves it here, at which point it's executed for real (see
+  // src/app/api/missions/[id]/approvals/route.ts PATCH).
+  agentKey   String?
+  toolKey    String?
+  argsJson   String?
+  resultJson String?
+
+  decidedById String?
+  decidedBy   User?   @relation(fields: [decidedById], references: [id])
+  createdAt  DateTime @default(now())
+  decidedAt  DateTime?
+}
+
+// ---------------------------------------------------------------------------
+// PERMISSION CENTER (User Flow Stage 14) — per-workspace overrides of the
+// default auto/approval/blocked mode for each tool. Absence of a row means
+// the default in src/lib/permissions/settings.ts applies.
+// ---------------------------------------------------------------------------
+model PermissionSetting {
+  id          String @id @default(cuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+  toolKey     String
+  mode        String // auto | approval | blocked
+  updatedAt   DateTime @updatedAt
+
+  @@unique([workspaceId, toolKey])
+}
+
+// Marketing Spend Controls (Stage 15) — real caps enforced in
+// src/lib/tools/registry.ts before any simulated campaign spend.
+model SpendControl {
+  id          String    @id @default(cuid())
+  workspaceId String    @unique
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+
+  maxDailySpend    Float   @default(10)
+  maxCampaignSpend Float   @default(100)
+
+  requireApprovalNewCampaign     Boolean @default(true)
+  requireApprovalBudgetIncrease  Boolean @default(true)
+  requireApprovalNewAudience     Boolean @default(true)
+  requireApprovalCampaignRestart Boolean @default(false)
+  allowAutoOptimizationWithinBudget Boolean @default(true)
+
+  updatedAt DateTime @updatedAt
+}
+
+// Communication Safety (Stage 16) — real gate in front of
+// sendWhatsAppMessage in src/lib/tools/registry.ts.
+model CommunicationPolicy {
+  id          String    @id @default(cuid())
+  workspaceId String    @unique
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+
+  mode String @default("auto_simple_and_qualify") // draft_only | auto_simple | auto_simple_and_qualify | full_auto_with_escalation
+
+  escalateComplex Boolean @default(true)
+  escalateRefund  Boolean @default(true)
+  escalateLegal   Boolean @default(true)
+  businessHours   String? // free-text, shown to the agent, not machine-enforced yet
+
+  updatedAt DateTime @updatedAt
+}
+
+// Agent Configuration (Stage 13) — flexible per-agent settings, fed into
+// that agent's system prompt for real (src/lib/ai/gemini.ts).
+model AgentSetting {
+  id          String    @id @default(cuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+  agentKey    String
+  settingsJson String   @default("{}")
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([workspaceId, agentKey])
+}
+
+// ---------------------------------------------------------------------------
+// BUSINESS KNOWLEDGE (Stage 12) — manual entry, document upload, or website
+// import. Fed into Content/Communication agent prompts for real.
+// ---------------------------------------------------------------------------
+model BusinessKnowledge {
+  id          String    @id @default(cuid())
+  businessId  String
+  business    Business  @relation(fields: [businessId], references: [id])
+  workspaceId String
+
+  source    String // manual | document | website
+  sourceRef String? // filename or URL
+  category  String // about | products | services | prices | faqs | policies | hours | locations | delivery | refund | contact | promotions | brand_voice | other
+  title     String
+  content   String
+  status    String @default("approved") // pending_review | approved
+
+  createdAt DateTime @default(now())
+}
+
+model BrandProfile {
+  id         String   @id @default(cuid())
+  businessId String   @unique
+  business   Business @relation(fields: [businessId], references: [id])
+
+  brandName     String?
+  tone          String? // e.g. "Professional but friendly"
+  language      String  @default("English")
+  wordsToUse    String? // comma-separated
+  wordsToAvoid  String? // comma-separated
+  emojiPreference String @default("minimal") // none | minimal | frequent
+  style         String  @default("short_and_clear") // short_and_clear | detailed | formal | casual
+  ctaStyle      String?
+
+  updatedAt DateTime @updatedAt
+}
+
+model Memory {
+  id        String   @id @default(cuid())
+  missionId String
+  mission   Mission  @relation(fields: [missionId], references: [id])
+  key       String
+  value     String
+  createdAt DateTime @default(now())
+}
+
+model ActivityLog {
+  id        String   @id @default(cuid())
+  missionId String
+  mission   Mission  @relation(fields: [missionId], references: [id])
+  actor     String // agent key or "orchestrator" or "system"
+  message   String
+  meta      String? // json
+  createdAt DateTime @default(now())
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  title     String
+  body      String
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+}
+
+// ---------------------------------------------------------------------------
+// DEVELOPER PLATFORM & ADMIN (Phase 9-10)
+// ---------------------------------------------------------------------------
+
+model ApiKey {
+  id          String    @id @default(cuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+  userId      String
+  user        User      @relation(fields: [userId], references: [id])
+  label       String
+  keyHash     String
+  scopes      String // json array
+  createdAt   DateTime  @default(now())
+  revokedAt   DateTime?
+
+  usage ApiUsage[]
+}
+
+model ApiUsage {
+  id        String   @id @default(cuid())
+  apiKeyId  String
+  apiKey    ApiKey   @relation(fields: [apiKeyId], references: [id])
+  endpoint  String
+  status    Int
+  createdAt DateTime @default(now())
+}
+
+model DeveloperApplication {
+  id        String   @id @default(cuid())
+  userId    String
+  name      String
+  status    String   @default("pending")
+  createdAt DateTime @default(now())
+}
+
+model SystemEvent {
+  id        String   @id @default(cuid())
+  level     String // info | warning | error
+  source    String
+  message   String
+  createdAt DateTime @default(now())
+}
+
+model AdminAuditLog {
+  id        String   @id @default(cuid())
+  adminId   String
+  admin     User     @relation(fields: [adminId], references: [id])
+  action    String
+  target    String?
+  createdAt DateTime @default(now())
+}

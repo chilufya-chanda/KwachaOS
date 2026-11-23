@@ -1,0 +1,5 @@
+import { NextRequest, NextResponse } from "next/server";
+import { AuthError, requireUser } from "@/lib/auth/session";
+import { prisma } from "@/lib/database/prisma";
+import { simulateCampaign, getMissionAnalytics } from "@/lib/simulation/engine";
+export async function POST(req:NextRequest,{params}:{params:{id:string}}){try{const user=await requireUser(req);const m=await prisma.mission.findFirst({where:{id:params.id,business:{workspace:{members:{some:{userId:user.id}}}}},include:{campaigns:true}});if(!m)return NextResponse.json({error:"Mission not found."},{status:404});if(m.status!=="active")return NextResponse.json({error:"Mission must be active to simulate."},{status:400});let body:any={};try{body=await req.json()}catch{}const result=await simulateCampaign(m.id,{campaignId:body.campaignId,spend:body.spend,seed:body.seed??42});return NextResponse.json({ok:true,result,analytics:await getMissionAnalytics(m.id)});}catch (e: any){if(e instanceof AuthError)return NextResponse.json({error:e.message},{status:e.status});return NextResponse.json({error:e instanceof Error?e.message:"Simulation failed."},{status:500});}}

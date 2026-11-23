@@ -1,0 +1,4 @@
+import { NextRequest, NextResponse } from "next/server";
+import { AuthError, requireUser } from "@/lib/auth/session";
+import { prisma } from "@/lib/database/prisma";
+export async function PATCH(req:NextRequest,{params}:{params:{id:string}}){try{const user=await requireUser(req);const key=await prisma.apiKey.findFirst({where:{id:params.id,workspace:{members:{some:{userId:user.id}}}}});if(!key)return NextResponse.json({error:"API key not found."},{status:404});await prisma.apiKey.update({where:{id:key.id},data:{revokedAt:new Date()}});await prisma.notification.create({data:{userId:user.id,title:"API key revoked",body:`${key.label} was revoked.`}});return NextResponse.json({ok:true,status:"revoked"});}catch (e: any){if(e instanceof AuthError)return NextResponse.json({error:e.message},{status:e.status});return NextResponse.json({error:"Unable to revoke API key."},{status:500});}}

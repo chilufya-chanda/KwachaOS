@@ -1,0 +1,37 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --kwacha-black: #0a0a0a;
+  --kwacha-gold: #c9a24b;
+}
+
+body {
+  background-color: var(--kwacha-black);
+  color: #f2f2f2;
+}
+
+.gold-text {
+  color: var(--kwacha-gold);
+}
+
+.kwacha-card {
+  @apply bg-kwacha-gray-900 border border-kwacha-gray-700 rounded-xl;
+}
+
+.kwacha-btn-primary {
+  @apply bg-kwacha-gold text-kwacha-black font-medium rounded-lg px-4 py-2.5
+    hover:bg-kwacha-gold-bright transition-colors disabled:opacity-50 disabled:cursor-not-allowed;
+}
+
+.kwacha-btn-secondary {
+  @apply bg-kwacha-gray-800 text-white font-medium rounded-lg px-4 py-2.5 border border-kwacha-gray-700
+    hover:bg-kwacha-gray-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed;
+}
+
+.kwacha-input {
+  @apply w-full bg-kwacha-gray-900 border border-kwacha-gray-700 rounded-lg px-3 py-2.5
+    text-white placeholder-kwacha-gray-500 focus:outline-none focus:border-kwacha-gold;
+}
+.label { @apply block text-xs uppercase tracking-wider text-kwacha-gray-400 mb-2; }

@@ -1,0 +1,4 @@
+import { NextRequest,NextResponse } from "next/server";
+import { AuthError,requireUser } from "@/lib/auth/session";
+import { prisma } from "@/lib/database/prisma";
+export async function GET(req:NextRequest){try{const user=await requireUser(req);const membership=await prisma.workspaceMember.findFirst({where:{userId:user.id},orderBy:{createdAt:"asc"}});if(!membership)return NextResponse.json({usage:[],total:0});const rows=await prisma.apiUsage.findMany({where:{apiKey:{workspaceId:membership.workspaceId}},include:{apiKey:{select:{label:true}}},orderBy:{createdAt:"desc"},take:200});return NextResponse.json({total:rows.length,usage:rows});}catch (e: any){if(e instanceof AuthError)return NextResponse.json({error:e.message},{status:e.status});return NextResponse.json({error:"Unable to load API usage."},{status:500});}}

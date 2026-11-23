@@ -1,0 +1,4 @@
+import { NextRequest, NextResponse } from "next/server";
+import { AuthError, requireUser } from "@/lib/auth/session";
+import { prisma } from "@/lib/database/prisma";
+export async function GET(req: NextRequest) { try { const user=await requireUser(req); const membership=await prisma.workspaceMember.findFirst({where:{userId:user.id},orderBy:{createdAt:"asc"}}); if(!membership)return NextResponse.json({missions:[]}); const missions=await prisma.mission.findMany({where:{business:{workspaceId:membership.workspaceId}},include:{business:true,stages:{orderBy:{order:"asc"}},_count:{select:{leads:true,runs:true,decisions:true}}},orderBy:{updatedAt:"desc"}}); return NextResponse.json({missions}); } catch (e: any){if(e instanceof AuthError)return NextResponse.json({error:e.message},{status:e.status});return NextResponse.json({error:"Unable to load mission history."},{status:500});}}

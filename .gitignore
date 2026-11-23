@@ -1,0 +1,49 @@
+# Dependencies
+node_modules/
+
+# Next.js
+.next/
+out/
+
+# Build output
+dist/
+build/
+
+# Environment secrets
+.env
+.env.*
+!.env.example
+!.env.ai-fallback.example
+
+# Deployment
+.vercel/
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# Local files
+.DS_Store
+*.pem
+
+# TypeScript
+*.tsbuildinfo
+
+# IDE
+.idea/
+.vscode/
+
+# Temporary files
+0
+npm
+target
+{
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Prisma local database
+prisma/dev.db

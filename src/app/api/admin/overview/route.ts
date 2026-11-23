@@ -1,0 +1,6 @@
+import { NextRequest, NextResponse } from "next/server";
+import { requireAdmin, AuthError } from "@/lib/auth/session";
+import { prisma } from "@/lib/database/prisma";
+import { recordAdminAudit } from "@/lib/admin";
+export async function GET(req: NextRequest) { try { const admin=await requireAdmin(req); const [users,workspaces,missions,runningAgents,agentRuns,heartbeatRuns,apiUsage,errors,tools,activeMissions,completedMissions]=await Promise.all([
+prisma.user.count(),prisma.workspace.count(),prisma.mission.count(),prisma.agent.count({where:{status:"active"}}),prisma.agentRun.count(),prisma.heartbeatRun.count(),prisma.apiUsage.count(),prisma.systemEvent.count({where:{level:"error"}}),prisma.tool.count(),prisma.mission.count({where:{status:"active"}}),prisma.mission.count({where:{status:"completed"}})]); await recordAdminAudit(admin.id,"view_overview","system"); return NextResponse.json({metrics:{users,workspaces,missions,runningAgents,agentRuns,heartbeatRuns,apiUsage,errors,tools,activeMissions,completedMissions}}); } catch (e: any){if(e instanceof AuthError)return NextResponse.json({error:e.message},{status:e.status});return NextResponse.json({error:"Unable to load system overview."},{status:500});}}
